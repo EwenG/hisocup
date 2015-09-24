@@ -27,3 +27,9 @@
            "<div><div>e</div></div>"))
     (is (= (html [:div [class-map-reagent-render 1 "e" 3]])
            "<div><div>e</div></div>"))))
+
+(deftest frender-call-not-compiled
+  (let [simple-fn (frender [x] [:div x])
+        nested-fn (fn [x] (frender [x] [:div x]))]
+    (is (= (html [:div [simple-fn 3]]) "<div><div>3</div></div>"))
+    (is (= (html [:div [nested-fn 3]]) "<div><div>3</div></div>"))))
