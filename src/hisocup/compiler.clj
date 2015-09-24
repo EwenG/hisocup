@@ -1,6 +1,7 @@
 (ns hisocup.compiler
   "Internal functions for compilation."
   (:use hisocup.util)
+  (:require [hisocup.render :refer [frender?]])
   (:import [clojure.lang IPersistentVector ISeq Named]))
 
 (defn- xml-mode? []
@@ -75,8 +76,22 @@
   "Render an element vector as a HTML element."
   [element]
   (let [[tag attrs content] (normalize-element element)]
-    (cond (fn? tag)
+    (cond (frender? tag)
           (render-html (apply tag content))
+          (fn? tag)
+          (let [next-fn-or-content (apply tag content)]
+            (prn next-fn-or-content)
+            (cond (fn? next-fn-or-content)
+                  (recur (into [next-fn-or-content] content))
+                  (and (map? next-fn-or-content)
+                       (:render next-fn-or-content))
+                  (recur (into [(:render next-fn-or-content)] content))
+                  (and (map? next-fn-or-content)
+                       (:reagent-render next-fn-or-content))
+                  (recur (into [(:reagent-render next-fn-or-content)]
+                               content))
+                  :else
+                  (render-html next-fn-or-content)))
           (container-tag? tag content)
           (str "<" tag (render-attr-map attrs) ">"
                (render-html content)
@@ -194,7 +209,9 @@
 
 (defmethod compile-element ::fn-tag
   [[tag & content]]
-  (apply (resolve tag) content))
+  `(if (= true (:frender (meta ~tag)))
+     [(~tag ~@content)]
+     nil))
 
 (defmethod compile-element ::all-literal
   [element]
