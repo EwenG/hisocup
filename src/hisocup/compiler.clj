@@ -1,7 +1,6 @@
 (ns hisocup.compiler
   "Internal functions for compilation."
   (:use hisocup.util)
-  (:require [hisocup.render :refer [frender?]])
   (:import [clojure.lang IPersistentVector ISeq Named]))
 
 (defn- xml-mode? []
@@ -47,6 +46,9 @@
   [tag content]
   (or content
       (and (html-mode?) (not (void-tags tag)))))
+
+(defn frender? [f]
+  (= true (:frender (meta f))))
 
 (defn- merge-attributes [{:keys [id class]} map-attrs]
   (->> map-attrs
@@ -186,8 +188,6 @@
   "Returns the compilation strategy to use for a given element."
   [[tag attrs & content :as element]]
   (cond
-    (and (symbol? tag) (var? (resolve tag)) (fn? @(resolve tag)))
-    ::fn-tag
     (every? literal? element)
     ::all-literal                    ; e.g. [:span "foo"]
     (and (literal? tag) (map? attrs))
@@ -206,12 +206,6 @@
   element."
   {:private true}
   element-compile-strategy)
-
-(defmethod compile-element ::fn-tag
-  [[tag & content]]
-  `(if (= true (:frender (meta ~tag)))
-     [(~tag ~@content)]
-     nil))
 
 (defmethod compile-element ::all-literal
   [element]

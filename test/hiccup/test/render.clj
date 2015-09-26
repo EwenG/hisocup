@@ -1,14 +1,7 @@
 (ns hisocup.test.render
   (:require [clojure.test :refer :all]
-            [hisocup.render :refer [frender defrender
-                                    frender? create-class]]
+            [hisocup.render :refer [frender defrender create-class]]
             [hisocup.core :refer [html]]))
-
-(deftest frender-type
-  (testing "frender type checks"
-    (is (= (fn? (frender [] [:div])) true))
-    (is (= (frender? (frender [] [:div])) true))
-    (is (= (frender? (fn [] [:div])) false))))
 
 (deftest function-call-not-compiled
   (let [simple-fn (fn [x] [:div x])
