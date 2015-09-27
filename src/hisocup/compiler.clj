@@ -3,6 +3,22 @@
   (:use hisocup.util)
   (:import [clojure.lang IPersistentVector ISeq Named]))
 
+;;Data-reactid attributes generation
+(def ^:dynamic *reactid* nil)
+
+(defn format-reactid [[prev-reactid reactid]]
+  (str prev-reactid "." (Integer/toString reactid 36)))
+
+(defn reactid-down [reactid]
+  (if-not reactid
+    nil
+    [(format-reactid reactid) 0]))
+
+(defn reactid-next [[prev-reactid reactid]]
+  (if-not reactid
+    nil
+    [prev-reactid (inc reactid)]))
+
 (defn- xml-mode? []
   (#{:xml :xhtml} *html-mode*))
 
@@ -27,8 +43,12 @@
       (xml-attribute name value)))
 
 (defn- render-attr-map [attrs]
-  (apply str
-    (sort (map render-attribute attrs))))
+  (->> (if-not *reactid*
+         attrs
+         (assoc attrs "data-reactid" (format-reactid *reactid*)))
+       (map render-attribute)
+       sort
+       (apply str)))
 
 (def ^{:doc "Regular expression that parses a CSS-style id and class from an element name."
        :private true}
@@ -79,10 +99,14 @@
   [element]
   (let [[tag attrs content] (normalize-element element)]
     (cond (frender? tag)
-          (render-html (apply tag content))
+          (render-html
+           (let [compiled-s
+                 (binding [*reactid* (or *reactid* ["" 0])]
+                   (apply tag content))]
+             (set! *reactid* (reactid-next *reactid*))
+             compiled-s))
           (fn? tag)
           (let [next-fn-or-content (apply tag content)]
-            (prn next-fn-or-content)
             (cond (fn? next-fn-or-content)
                   (recur (into [next-fn-or-content] content))
                   (and (map? next-fn-or-content)
@@ -93,11 +117,19 @@
                   (recur (into [(:reagent-render next-fn-or-content)]
                                content))
                   :else
-                  (render-html next-fn-or-content)))
+                  (let [compiled-s
+                        (binding [*reactid* (or *reactid* ["" 0])]
+                          (render-html next-fn-or-content))]
+                    (set! *reactid* (reactid-next *reactid*))
+                    compiled-s)))
           (container-tag? tag content)
-          (str "<" tag (render-attr-map attrs) ">"
-               (render-html content)
-               "</" tag ">")
+          (let [compiled-s
+                (str "<" tag (render-attr-map attrs) ">"
+                     (binding [*reactid* (reactid-down *reactid*)]
+                       (render-html content))
+                     "</" tag ">")]
+            (set! *reactid* (reactid-next *reactid*))
+            compiled-s)
           :else
           (str "<" tag (render-attr-map attrs) (end-tag)))))
 
@@ -129,9 +161,7 @@
   "Returns an unevaluated form that will render the supplied map as HTML
   attributes."
   [attrs]
-  (if (some unevaluated? (mapcat identity attrs))
-    `(#'render-attr-map ~attrs)
-    (render-attr-map attrs)))
+  `(#'render-attr-map ~attrs))
 
 (defn- form-name
   "Get the name of the supplied form."
@@ -207,18 +237,37 @@
   {:private true}
   element-compile-strategy)
 
+(defn with-next-reactid [compiled-s]
+  `(let [compiled-s# ~compiled-s]
+     (set! *reactid* (reactid-next *reactid*))
+     compiled-s#))
+
+(defn with-down-reactid [compiled-seq]
+  `(let [compiled-seq# ~compiled-seq]
+     (set! *reactid* (reactid-next *reactid*))
+     compiled-s#))
+
 (defmethod compile-element ::all-literal
   [element]
-  (render-element (eval element)))
+  (let [[tag attrs content] (normalize-element (eval element))]
+    (with-next-reactid
+      (if (container-tag? tag content)
+        `(str ~(str "<" tag) ~(compile-attr-map attrs) ">"
+              (binding [*reactid* (reactid-down *reactid*)]
+                (str ~@(compile-seq content)))
+              ~(str "</" tag ">"))
+        `(str "<" ~tag ~(compile-attr-map attrs) ~(end-tag))))))
 
 (defmethod compile-element ::literal-tag-and-attributes
   [[tag attrs & content]]
   (let [[tag attrs _] (normalize-element [tag attrs])]
-    (if (container-tag? tag content)
-      `(str ~(str "<" tag) ~(compile-attr-map attrs) ">"
-            ~@(compile-seq content)
-            ~(str "</" tag ">"))
-      `(str "<" ~tag ~(compile-attr-map attrs) ~(end-tag)))))
+    (with-next-reactid
+      (if (container-tag? tag content)
+        `(str ~(str "<" tag) ~(compile-attr-map attrs) ">"
+              (binding [*reactid* (reactid-down *reactid*)]
+                (str ~@(compile-seq content)))
+              ~(str "</" tag ">"))
+        `(str "<" ~tag ~(compile-attr-map attrs) ~(end-tag))))))
 
 (defmethod compile-element ::literal-tag-and-no-attributes
   [[tag & content]]
@@ -228,21 +277,25 @@
   [[tag attrs & content]]
   (let [[tag tag-attrs _] (normalize-element [tag])
         attrs-sym         (gensym "attrs")]
-    `(let [~attrs-sym ~attrs]
-       (if (map? ~attrs-sym)
-         ~(if (container-tag? tag content)
-            `(str ~(str "<" tag)
-                  (#'render-attr-map (merge ~tag-attrs ~attrs-sym)) ">"
-                  ~@(compile-seq content)
-                  ~(str "</" tag ">"))
-            `(str ~(str "<" tag)
-                  (#'render-attr-map (merge ~tag-attrs ~attrs-sym))
-                  ~(end-tag)))
-         ~(if (container-tag? tag attrs)
-            `(str ~(str "<" tag (render-attr-map tag-attrs) ">")
-                  ~@(compile-seq (cons attrs-sym content))
-                  ~(str "</" tag ">"))
-            (str "<" tag (render-attr-map tag-attrs) (end-tag)))))))
+    (with-next-reactid
+      `(let [~attrs-sym ~attrs]
+         (if (map? ~attrs-sym)
+           ~(if (container-tag? tag content)
+              `(str ~(str "<" tag)
+                    (#'render-attr-map (merge ~tag-attrs ~attrs-sym)) ">"
+                    (binding [*reactid* (reactid-down *reactid*)]
+                      (str ~@(compile-seq content)))
+                    ~(str "</" tag ">"))
+              `(str ~(str "<" tag)
+                    (#'render-attr-map (merge ~tag-attrs ~attrs-sym))
+                    ~(end-tag)))
+           ~(if (container-tag? tag attrs)
+              `(str ~(str "<" tag) (#'render-attr-map ~tag-attrs) ">"
+                    (binding [*reactid* (reactid-down *reactid*)]
+                      (str ~@(compile-seq (cons attrs-sym content))))
+                    ~(str "</" tag ">"))
+              `(str ~(str "<" tag) (#'render-attr-map ~tag-attrs)
+                    ~(end-tag))))))))
 
 (defmethod compile-element :default
   [element]
@@ -250,7 +303,10 @@
      [~(first element)
       ~@(for [x (rest element)]
           (if (vector? x)
-            (compile-element x)
+            `(let [compiled# (binding [*reactid* (reactid-down *reactid*)]
+                               ~(compile-element x))]
+               (set! *reactid* (reactid-next *reactid*))
+               compiled#)
             x))]))
 
 (defn- compile-seq
@@ -272,7 +328,8 @@
     (cons
      (first expr)
      (mapcat
-      #(if (and (seq? %) (symbol? (first %)) (= (first %) (first expr) `str))
+      #(if (and (seq? %) (symbol? (first %))
+                (= (first %) (first expr) `str))
          (rest (collapse-strs %))
          (list (collapse-strs %)))
       (rest expr)))
@@ -281,4 +338,5 @@
 (defn compile-html
   "Pre-compile data structures into HTML where possible."
   [& content]
-  (collapse-strs `(str ~@(compile-seq content))))
+  (collapse-strs `(binding [*reactid* *reactid*]
+                    (str ~@(compile-seq content)))))

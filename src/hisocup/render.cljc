@@ -15,32 +15,35 @@
           [then else]
           (if (cljs-env? &env) then else)))
 
-#(:clj (defmacro frender [& fn-params]
-         (let [wrap-body (fn [body] (cons 'hisocup.core/html body))
-               [name params-body] (if (symbol? (first fn-params))
-                                    [(first fn-params) (next fn-params)]
-                                    [nil fn-params])
-               [params body] (if (vector? (first params-body))
-                               [(first params-body)
-                                (wrap-body (next params-body))]
-                               [nil nil])
-               bodies (map (fn [params-body]
-                             (if (list? params-body)
-                               (list (first params-body)
-                                     (wrap-body (rest params-body)))
-                               params-body))
-                           params-body)
-               result-fn (cond (and name params)
-                               `(fn ~name ~params ~body)
-                               (and (not name) params)
-                               `(fn ~params ~body)
-                               (and name bodies)
-                               `(fn ~name ~@bodies)
-                               (and (not name) bodies)
-                               `(fn ~@bodies))]
-           `(if-cljs
-             ~result-fn
-             (with-meta ~result-fn {:frender true})))))
+#?(:clj (defmacro frender [& fn-params]
+          (let [wrap-body (fn [body] (if (cljs-env? &env)
+                                       body
+                                       (list
+                                        (cons 'hisocup.core/html body))))
+                [name params-body] (if (symbol? (first fn-params))
+                                     [(first fn-params) (next fn-params)]
+                                     [nil fn-params])
+                [params body] (if (vector? (first params-body))
+                                [(first params-body)
+                                 (wrap-body (next params-body))]
+                                [nil nil])
+                bodies (map (fn [params-body]
+                              (if (list? params-body)
+                                (list (first params-body)
+                                      (wrap-body (rest params-body)))
+                                params-body))
+                            params-body)
+                result-fn (cond (and name params)
+                                `(fn ~name ~params ~@body)
+                                (and (not name) params)
+                                `(fn ~params ~@body)
+                                (and name bodies)
+                                `(fn ~name ~@bodies)
+                                (and (not name) bodies)
+                                `(fn ~@bodies))]
+            `(if-cljs
+              ~result-fn
+              (with-meta ~result-fn {:frender true})))))
 
 ;;Taken from clojure.tools.macro
 (defn name-with-attributes
