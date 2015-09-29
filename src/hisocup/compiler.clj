@@ -1,7 +1,20 @@
 (ns hisocup.compiler
   "Internal functions for compilation."
   (:use hisocup.util)
-  (:import [clojure.lang IPersistentVector ISeq Named]))
+  (:import [clojure.lang IPersistentVector ISeq Named]
+           [java.util.zip Adler32]
+           [java.nio.charset StandardCharsets]))
+
+;;Utils for Adler32 computations
+(def ^:const MOD 65521)
+
+(defn sign-bit [x]
+  (bit-shift-right (bit-and 0x80000000 x) 31))
+
+(defn to-adler-string [x]
+  (if (= 1 (sign-bit x))
+    (dec (- (bit-xor 0xFFFFFFFF (bit-and 0xFFFFFFFF x))))
+    (bit-and 0xFFFFFFFF x)))
 
 ;;Data-reactid attributes generation
 (def ^:dynamic *reactid* nil)
@@ -94,6 +107,20 @@
   (render-html [this]
     "Turn a Clojure data type into a string of HTML."))
 
+(defn maybe-add-checksum [compiled-s]
+  (let [index (.indexOf compiled-s (int \>))
+        compiled-bytes (.getBytes compiled-s StandardCharsets/UTF_8)
+        adler32 (doto (Adler32.) (.update compiled-bytes))
+        checksum (.getValue adler32)
+        checksum (to-adler-string checksum)]
+    (if (= -1 index)
+      compiled-s
+      (str (subs compiled-s 0 index)
+           "data-react-checksum=\""
+           checksum
+           "\" "
+           (subs compiled-s index)))))
+
 (defn- render-element
   "Render an element vector as a HTML element."
   [element]
@@ -102,7 +129,10 @@
           (render-html
            (let [compiled-s
                  (binding [*reactid* (or *reactid* ["" 0])]
-                   (apply tag content))]
+                   (apply tag content))
+                 compiled-s (if-not *reactid*
+                              (maybe-add-checksum compiled-s)
+                              compiled-s)]
              (set! *reactid* (reactid-next *reactid*))
              compiled-s))
           (fn? tag)
