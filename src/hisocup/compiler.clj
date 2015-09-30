@@ -38,30 +38,27 @@
 (defn- html-mode? []
   (#{:html :xhtml} *html-mode*))
 
-(defn- end-tag []
-  (if (xml-mode?) " />" ">"))
+(defn- end-tag [] ">")
+
+(def ^:const supported-attributes #{"low" "role" "allowTransparency" "seamless" "noValidate" "selected" "lang" "loop" "min" "wmode" "width" "colSpan" "list" "media" "acceptCharset" "high" "coords" "scrolling" "defer" "height" "htmlFor" "for" "encType" "shape" "tabIndex" "formNoValidate" "muted" "className" "class" "scoped" "marginHeight" "download" "placeholder" "label" "method" "form" "radioGroup" "srcDoc" "max" "mediaGroup" "charSet" "hrefLang" "id" "dateTime" "frameBorder" "contextMenu" "formTarget" "src" "cellPadding" "async" "maxLength" "rowSpan" "href" "name" "useMap" "style" "accessKey" "value" "span" "formEncType" "preload" "optimum" "accept" "formAction" "srcSet" "start" "alt" "scope" "action" "content" "dir" "draggable" "autoComplete" "readOnly" "title" "required" "rel" "pattern" "type" "cols" "poster" "controls" "cellSpacing" "target" "hidden" "manifest" "autoPlay" "sandbox" "size" "formMethod" "rows" "marginWidth" "sizes" "classID" "open" "disabled" "data" "checked" "contentEditable" "spellCheck" "crossOrigin" "allowFullScreen" "httpEquiv" "autoFocus" "step" "multiple" "icon" "headers" :role :rel :formMethod :open :async :httpEquiv :min :sizes :rowSpan :frameBorder :noValidate :selected :tabIndex :dir :muted :seamless :placeholder :formTarget :disabled :alt :marginHeight :marginWidth :autoFocus :coords :method :content :formEncType :name :autoComplete :radioGroup :value :optimum :scoped :width :start :defer :cellSpacing :type :controls :manifest :src :icon :multiple :scope :sandbox :className :class :size :title :headers :loop :high :style :lang :rows :dateTime :allowFullScreen :cols :crossOrigin :scrolling :preload :colSpan :classID :poster :hrefLang :draggable :allowTransparency :list :readOnly :acceptCharset :formAction :hidden :max :label :id :wmode :checked :accessKey :shape :srcSet :mediaGroup :spellCheck :autoPlay :low :maxLength :contentEditable :action :htmlFor :for :useMap :encType :form :cellPadding :target :contextMenu :formNoValidate :download :step :charSet :srcDoc :media :href :required :height :pattern :accept :span :data "clipPath" "cx" "cy" "d" "dx" "dy" "fill" "fillOpacity" "fontFamily" "fontSize" "fx" "fy" "gradientTransform" "gradientUnits" "markerEnd" "markerMid" "markerStart" "offset" "opacity" "patternContentUnits" "patternUnits" "points" "preserveAspectRatio" "r" "rx" "ry" "spreadMethod" "stopColor" "stopOpacity" "stroke" "strokeDasharray" "strokeLinecap" "strokeOpacity" "strokeWidth" "textAnchor" "transform" "version" "viewBox" "x1" "x2" "x" "y1" "y2" "y" :clipPath :cx :cy :d :dx :dy :fill :fillOpacity :fontFamily :fontSize :fx :fy :gradientTransform :gradientUnits :markerEnd :markerMid :markerStart :offset :opacity :patternContentUnits :patternUnits :points :preserveAspectRatio :r :rx :ry :spreadMethod :stopColor :stopOpacity :stroke :strokeDasharray :strokeLinecap :strokeOpacity :strokeWidth :textAnchor :transform :version :viewBox :x1 :x2 :x :y1 :y2 :y})
 
 (defn- xml-attribute [name value]
-  (str " " (as-str name) "=\"" (escape-html value) "\""))
+  (str " " name "=\"" (escape-html value) "\""))
 
 (defn- render-attribute [[name value]]
-  (cond
-    (true? value)
-      (if (xml-mode?)
-        (xml-attribute name name)
-        (str " " (as-str name)))
-    (not value)
+  (let [name (.toLowerCase (as-str name))]
+    (if (nil? value)
       ""
-    :else
-      (xml-attribute name value)))
+      (xml-attribute name value))))
 
 (defn- render-attr-map [attrs]
-  (->> (if-not *reactid*
-         attrs
-         (assoc attrs "data-reactid" (format-reactid *reactid*)))
-       (map render-attribute)
-       sort
-       (apply str)))
+  (let [attrs (select-keys attrs supported-attributes)
+        reactid-attr (if *reactid*
+                       [[:data-reactid (format-reactid *reactid*)]]
+                       [])]
+    (->> (into (vec attrs) reactid-attr)
+         (map render-attribute)
+         (apply str))))
 
 (def ^{:doc "Regular expression that parses a CSS-style id and class from an element name."
        :private true}
@@ -116,9 +113,9 @@
     (if (= -1 index)
       compiled-s
       (str (subs compiled-s 0 index)
-           "data-react-checksum=\""
+           " data-react-checksum=\""
            checksum
-           "\" "
+           "\""
            (subs compiled-s index)))))
 
 (defn- render-element
@@ -370,3 +367,15 @@
   [& content]
   (collapse-strs `(binding [*reactid* *reactid*]
                     (str ~@(compile-seq content)))))
+
+
+(comment
+  (require '[hisocup.core :refer [html]])
+  (require '[hisocup.render :refer [defrender]])
+  (let [x "e"]
+    (defrender ff [] [:div {} x] #_[:div [:a] [:abbr] [:address] [:area] [:article] [:aside] [:audio] [:b]  [:base] [:bdi] [:bdo] [:big] [:blockquote] [:br] [:button] [:canvas] [:caption] [:cite] [:code] [:col] [:colgroup] [:data] [:datalist] [:dd] [:del] [:details] [:dfn] [:dialog] [:div] [:dl] [:dt] [:em] [:embed] [:fieldset] [:figcaption] [:figure] [:footer] [:form] [:h1] [:h2] [:h3] [:h4] [:h5] [:h6] [:header] [:hr] [:i] [:iframe] [:img] [:ins] [:kbd] [:keygen] [:label] [:legend] [:li] [:link] [:main] [:map] [:mark] [:menu] [:menuitem] [:meta] [:meter] [:nav] [:noscript] [:object] [:ol] [:optgroup] [:option] [:output] [:p] [:param] [:picture] [:pre] [:progress] [:q] [:rp] [:rt] [:ruby] [:s] [:samp] [:script] [:section] [:select] [:small] [:source] [:span] [:strong] [:style] [:sub] [:summary] [:sup] [:table] [:tbody] [:td] [:tfoot] [:th] [:thead] [:time] [:title] [:tr] [:track] [:u] [:ul] [:var] [:video] [:wbr]] #_[:div [:input] [:textarea] ]))
+
+  (html [ff])
+
+
+  )
