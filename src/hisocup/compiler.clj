@@ -67,15 +67,20 @@
 (def ^{:doc "A list of elements that must be rendered without a closing tag."
        :private true}
   void-tags
-  #{"area" "base" "br" "col" "command" "embed" "hr" "img" "input" "keygen" "link"
-    "meta" "param" "source" "track" "wbr"})
+  #{"area" "base" "br" "col" "command" "embed" "hr" "img" "input" "keygen"
+    "link" "meta" "param" "source" "track" "wbr"})
 
 (defn- container-tag?
   "Returns true if the tag has content or is not a void tag. In non-HTML modes,
   all contentless tags are assumed to be void tags."
   [tag content]
-  (or content
-      (and (html-mode?) (not (void-tags tag)))))
+  (= nil (get void-tags tag)))
+
+(defn before-content [tag]
+  "Insert a \n character before the content of pre tags in order to match
+react markup"
+  (if (= "pre" tag)
+    "\n" ""))
 
 (defn frender? [f]
   (= true (:frender (meta f))))
@@ -152,13 +157,20 @@
           (container-tag? tag content)
           (let [compiled-s
                 (str "<" tag (render-attr-map attrs) ">"
+                     (before-content tag)
                      (binding [*reactid* (reactid-down *reactid*)]
                        (render-html content))
                      "</" tag ">")]
             (set! *reactid* (reactid-next *reactid*))
             compiled-s)
           :else
-          (str "<" tag (render-attr-map attrs) (end-tag)))))
+          (let [compiled-s
+                (str "<" tag (render-attr-map attrs) (end-tag)
+                     (before-content tag)
+                     (binding [*reactid* (reactid-down *reactid*)]
+                       (render-html content)))]
+            (set! *reactid* (reactid-next *reactid*))
+            compiled-s))))
 
 (extend-protocol HtmlRenderer
   IPersistentVector
@@ -280,6 +292,7 @@
     (with-next-reactid
       (if (container-tag? tag content)
         `(str ~(str "<" tag) ~(compile-attr-map attrs) ">"
+              ~(before-content tag)
               (binding [*reactid* (reactid-down *reactid*)]
                 (str ~@(compile-seq content)))
               ~(str "</" tag ">"))
@@ -291,6 +304,7 @@
     (with-next-reactid
       (if (container-tag? tag content)
         `(str ~(str "<" tag) ~(compile-attr-map attrs) ">"
+              ~(before-content tag)
               (binding [*reactid* (reactid-down *reactid*)]
                 (str ~@(compile-seq content)))
               ~(str "</" tag ">"))
@@ -310,6 +324,7 @@
            ~(if (container-tag? tag content)
               `(str ~(str "<" tag)
                     (#'render-attr-map (merge ~tag-attrs ~attrs-sym)) ">"
+                    ~(before-content tag)
                     (binding [*reactid* (reactid-down *reactid*)]
                       (str ~@(compile-seq content)))
                     ~(str "</" tag ">"))
@@ -318,6 +333,7 @@
                     ~(end-tag)))
            ~(if (container-tag? tag attrs)
               `(str ~(str "<" tag) (#'render-attr-map ~tag-attrs) ">"
+                    ~(before-content tag)
                     (binding [*reactid* (reactid-down *reactid*)]
                       (str ~@(compile-seq (cons attrs-sym content))))
                     ~(str "</" tag ">"))
@@ -326,15 +342,44 @@
 
 (defmethod compile-element :default
   [element]
-  `(#'render-element
-     [~(first element)
-      ~@(for [x (rest element)]
-          (if (vector? x)
-            `(let [compiled# (binding [*reactid* (reactid-down *reactid*)]
-                               ~(compile-element x))]
-               (set! *reactid* (reactid-next *reactid*))
-               compiled#)
-            x))]))
+  `(cond (frender? ~(first element))
+         (#'render-html
+          (let [compiled#
+                (binding [*reactid* (or *reactid* ["" 0])]
+                  (apply ~(first element) ~(rest element)))
+                compiled-checksum# (if-not *reactid*
+                                     (maybe-add-checksum compiled#)
+                                     compiled#)]
+            (set! *reactid* (reactid-next *reactid*))
+            compiled-checksum#))
+         (fn? tag)
+         (let [next-fn-or-content# (apply ~(first element) ~(rest element))]
+           (cond (fn? next-fn-or-content#)
+                 (recur (into [next-fn-or-content] content))
+                 (and (map? next-fn-or-content)
+                      (:render next-fn-or-content))
+                 (recur (into [(:render next-fn-or-content)] content))
+                 (and (map? next-fn-or-content)
+                      (:reagent-render next-fn-or-content))
+                 (recur (into [(:reagent-render next-fn-or-content)]
+                              content))
+                 :else
+                 (let [compiled-s
+                       (binding [*reactid* (or *reactid* ["" 0])]
+                         (render-html next-fn-or-content))]
+                   (set! *reactid* (reactid-next *reactid*))
+                   compiled-s)))
+         :else
+         (#'render-element
+          [~(first element)
+           ~@(for [x (rest element)]
+               (if (vector? x)
+                 `(let [compiled# (binding [*reactid*
+                                            (reactid-down *reactid*)]
+                                    ~(compile-element x))]
+                    (set! *reactid* (reactid-next *reactid*))
+                    compiled#)
+                 x))])))
 
 (defn- compile-seq
   "Compile a sequence of data-structures into HTML."
@@ -371,11 +416,17 @@
 
 (comment
   (require '[hisocup.core :refer [html]])
-  (require '[hisocup.render :refer [defrender]])
-  (let [x "e"]
-    (defrender ff [] [:div {} x] #_[:div [:a] [:abbr] [:address] [:area] [:article] [:aside] [:audio] [:b]  [:base] [:bdi] [:bdo] [:big] [:blockquote] [:br] [:button] [:canvas] [:caption] [:cite] [:code] [:col] [:colgroup] [:data] [:datalist] [:dd] [:del] [:details] [:dfn] [:dialog] [:div] [:dl] [:dt] [:em] [:embed] [:fieldset] [:figcaption] [:figure] [:footer] [:form] [:h1] [:h2] [:h3] [:h4] [:h5] [:h6] [:header] [:hr] [:i] [:iframe] [:img] [:ins] [:kbd] [:keygen] [:label] [:legend] [:li] [:link] [:main] [:map] [:mark] [:menu] [:menuitem] [:meta] [:meter] [:nav] [:noscript] [:object] [:ol] [:optgroup] [:option] [:output] [:p] [:param] [:picture] [:pre] [:progress] [:q] [:rp] [:rt] [:ruby] [:s] [:samp] [:script] [:section] [:select] [:small] [:source] [:span] [:strong] [:style] [:sub] [:summary] [:sup] [:table] [:tbody] [:td] [:tfoot] [:th] [:thead] [:time] [:title] [:tr] [:track] [:u] [:ul] [:var] [:video] [:wbr]] #_[:div [:input] [:textarea] ]))
+  (require '[hisocup.render :refer [defrender frender]])
+
+   (let [x (frender [] [:div])]
+    (html [x "e"]))
+
+  (defrender ff [] [:div [:a] [:abbr] [:address] [:area] [:article] [:aside] [:audio] [:b]  [:base] [:bdi] [:bdo] [:big] [:blockquote] [:br] [:button] [:canvas] [:caption] [:cite] [:code] [:col] [:colgroup] [:data] [:datalist] [:dd] [:del] [:details] [:dfn] [:dialog] [:div] [:dl] [:dt] [:em] [:embed] [:fieldset] [:figcaption] [:figure] [:footer] [:form] [:h1] [:h2] [:h3] [:h4] [:h5] [:h6] [:header] [:hr] [:i] [:iframe] [:img] [:ins] [:kbd] [:keygen] [:label] [:legend] [:li] [:link] [:main] [:map] [:mark] [:menu] [:menuitem] [:meta] [:meter] [:nav] [:noscript] [:object] [:ol] [:optgroup] [:option] [:output] [:p] [:param] [:picture] [:pre] [:progress] [:q] [:rp] [:rt] [:ruby] [:s] [:samp] [:script] [:section] [:select] [:small] [:source] [:span] [:strong] [:style] [:sub] [:summary] [:sup] [:table] [:tbody] [:td] [:tfoot] [:th] [:thead] [:time] [:title] [:tr] [:track] [:u] [:ul] [:var] [:video] [:wbr] [:circle] [:clipPath] [:defs] [:ellipse] [:g] [:line] [:linearGradient] [:mask] [:path] [:pattern] [:polygon] [:polyline] [:radialGradient] [:rect] [:stop] [:svg] [:text] [:tspan]] #_[:div [:input] [:textarea] ])
+
+(defrender ff [] [:div [:a "e"] [:abbr "e"] [:address "e"] [:area "e"] [:article "e"] [:aside "e"] [:audio "e"] [:b "e"] [:base "e"] [:bdi "e"] [:bdo "e"] [:big "e"] [:blockquote "e"] [:br "e"] [:button "e"] [:canvas "e"] [:caption "e"] [:cite "e"] [:code "e"] [:col "e"] [:colgroup "e"] [:data "e"] [:datalist "e"] [:dd "e"] [:del "e"] [:details "e"] [:dfn "e"] [:dialog "e"] [:div "e"] [:dl "e"] [:dt "e"] [:em "e"] [:embed "e"] [:fieldset "e"] [:figcaption "e"] [:figure "e"] [:footer "e"] [:form "e"] [:h1 "e"] [:h2 "e"] [:h3 "e"] [:h4 "e"] [:h5 "e"] [:h6 "e"] [:header "e"] [:hr "e"] [:i "e"] [:iframe "e"] [:img "e"] [:ins "e"] [:kbd "e"] [:keygen "e"] [:label "e"] [:legend "e"] [:li "e"] [:link "e"] [:main "e"] [:map "e"] [:mark "e"] [:menu "e"] [:menuitem "e"] [:meta "e"] [:meter "e"] [:nav "e"] [:noscript "e"] [:object "e"] [:ol "e"] [:optgroup "e"] [:option "e"] [:output "e"] [:p "e"] [:param "e"] [:picture "e"] [:pre "e"] [:progress "e"] [:q "e"] [:rp "e"] [:rt "e"] [:ruby "e"] [:s "e"] [:samp "e"] [:script "e"] [:section "e"] [:select "e"] [:small "e"] [:source "e"] [:span "e"] [:strong "e"] [:style "e"] [:sub "e"] [:summary "e"] [:sup "e"] [:table "e"] [:tbody "e"] [:td "e"] [:tfoot "e"] [:th "e"] [:thead "e"] [:time "e"] [:title "e"] [:tr "e"] [:track "e"] [:u "e"] [:ul "e"] [:var "e"] [:video "e"] [:wbr "e"] [:circle "e"] [:clipPath "e"] [:defs "e"] [:ellipse "e"] [:g "e"] [:line "e"] [:linearGradient "e"] [:mask "e"] [:path "e"] [:pattern "e"] [:polygon "e"] [:polyline "e"] [:radialGradient "e"] [:rect "e"] [:stop "e"] [:svg "e"] [:text "e"] [:tspan "e"]])
 
   (html [ff])
 
+  (html [:img "e"])
 
   )
