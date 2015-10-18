@@ -1,5 +1,23 @@
 (ns hisocup.vdom
+  (:require [cljs.analyzer.api :as ana-api])
   (:use hisocup.util))
+
+(comment
+  (require-macros '[hisocup.vdom :refer [mm]])
+  )
+
+(defn analyze [env x]
+  (let [ana-x (ana-api/analyze env x)
+        form (:form ana-x)
+        new-env (:env ana-x)]
+    (cond
+      (seq? form)
+      (#(doall (map %1 %2))
+       (partial analyze new-env) form)
+      :else x)))
+
+(defmacro mm [x]
+  `(quote ~(analyze &env x)))
 
 (def ^{:doc "Regular expression that parses a CSS-style id and class from an element name."
        :private true}
@@ -230,7 +248,8 @@
             x-mid (if down x-start (inc x-start))
             y-mid (- x-mid k)
             diag-nb (- x-end x-mid)]
-        (vswap! result conj [[x-start y-start] [x-mid y-mid] [ x-end y-end]])
+        (vswap! result conj
+                [[x-start y-start] [x-mid y-mid] [ x-end y-end]])
         (if (or (> x-start 0)
                 (> y-start 0))
           (recur (dec d) [x-start y-start])
@@ -257,5 +276,13 @@
 
   )
 
+(defmacro ee [e]
+  (let [bbb (meta e)]
+    `(str ~bbb)))
 
-;Add a mutable map to vtrees. Contains ID -> real dom node
+(definline ee2 [r]
+  `(str ~r))
+
+
+; Add a mutable map to vtrees. Contains ID -> real dom node
+; If branching -> store the conditional result, if different force the node(s) overriding.

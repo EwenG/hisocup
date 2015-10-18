@@ -2,4 +2,5 @@
   :description "A slightly modified version of hiccup which can be used to build isomorphic applications based on hiccup and reagent."
   :url "https://github.com/EwenG/hisocup"
   :dependencies [[org.clojure/clojure "1.7.0"]
+                 [org.clojure/clojurescript "1.7.48"]
                  [reagent "0.5.1"]])
