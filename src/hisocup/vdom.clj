@@ -1,6 +1,7 @@
 (ns hisocup.vdom
   (:require [cljs.analyzer.api :as ana-api])
-  (:use hisocup.util))
+  (:use hisocup.util)
+  (:import [clojure.lang IPersistentVector ISeq Named]))
 
 (comment
   (require-macros '[hisocup.vdom :refer [mm]])
@@ -15,6 +16,10 @@
       (#(doall (map %1 %2))
        (partial analyze new-env) form)
       :else x)))
+
+(defn ast-show-only [ast keys]
+  (assoc (select-keys ast keys)
+         :children (mapv #(ast-show-only % keys) (:children ast))))
 
 (defmacro mm [x]
   `(quote ~(analyze &env x)))
@@ -80,6 +85,17 @@
       (not (unevaluated? x))
       (not-hint? x java.util.Map)))
 
+(defn format-attribute [[name value]]
+  (let [name (.toLowerCase (as-str name))]
+    (if-not value
+      `()
+      `(~(str name) ~(escape-html value)))))
+
+(defn render-attr-map [attrs]
+  (->> (map format-attribute attrs)
+       (apply concat)
+       (cons 'cljs.core/js-array)))
+
 (defn- merge-attributes [{:keys [id class]} map-attrs]
   (->> map-attrs
        (merge (if id {:id id}))
@@ -89,16 +105,50 @@
   "Ensure an element vector is of the form [tag-name attrs content]."
   [[tag & content]]
   (when (not (or (keyword? tag) (symbol? tag) (string? tag) (fn? tag)))
-    (throw (IllegalArgumentException. (str tag " is not a valid element name."))))
+    (throw (IllegalArgumentException.
+            (str tag " is not a valid element name."))))
   (if (fn? tag)
     [tag {} content]
     (let [[_ tag id class] (re-matches re-tag (as-str tag))
           tag-attrs        {:id id
-                            :class (if class (.replace ^String class "." " "))}
+                            :class (if class
+                                     (.replace ^String class "." " "))}
           map-attrs        (first content)]
       (if (map? map-attrs)
         [tag (merge-attributes tag-attrs map-attrs) (next content)]
         [tag tag-attrs content]))))
+
+(defprotocol HtmlRenderer
+  (render-html [this]))
+
+(defn render-element [element]
+  (let [[tag attrs content] (normalize-element element)]
+    (let [attrs (render-attr-map attrs)
+          node `(goog.dom.createDom ~tag ~attrs)]
+      (if-not (nil? content)
+        (let [node-sym (gensym "node-sym")]
+          `(let [~node-sym ~node]
+             (goog.dom.append
+              ~node-sym (~'js-array ~@(render-html content)))
+             ~node-sym))
+        node))))
+
+(extend-protocol HtmlRenderer
+  IPersistentVector
+  (render-html [this]
+    (render-element this))
+  ISeq
+  (render-html [this]
+    (map render-html this))
+  Named
+  (render-html [this]
+    `(goog.dom.createTextNode ~(name this)))
+  Object
+  (render-html [this]
+    `(goog.dom.createTextNode ~(str this)))
+  nil
+  (render-html [this]
+    `(goog.dom.createTextNode "")))
 
 (defn- element-compile-strategy
   "Returns the compilation strategy to use for a given element."
@@ -117,47 +167,39 @@
 
 (declare compile-seq)
 
-(defmulti compile-element
-  "Returns an unevaluated form that will render the supplied vector as a HTML
-  element."
-  {:private true}
-  element-compile-strategy)
+(defmulti compile-element-static
+  (fn [{:keys [op] :as ast-node}]
+    (let [{first-op :op first-tag :tag} (first (:children ast-node))
+          {second-op :op second-tag :tag} (second (:children ast-node))]
+      (cond
+        (= op :constant)
+        [:constant]
+        (and (= op :vector)
+             (or (= 'cljs.core/Keyword first-tag)
+                 (= 'string first-tag)
+                 (= 'cljs.core/Symbol first-tag))
+             (or (not (second (:children ast-node)))
+                 (= :constant second-op)
+                 (= :map second-op)
+                 (= :vector second-op)))
+        [:node :all-literal]
+        :else [:default]))))
 
-(defmethod compile-element ::all-literal
-  [element]
-  (let [[tag attrs content] (normalize-element (eval element))]
-    `(StaticNode. ~tag ~attrs ~@(compile-seq content))))
+(defmethod compile-element-static [:constant]
+  [{:keys [form]}]
+  (render-html form))
 
-(defmethod compile-element ::literal-tag-and-attributes
-  [[tag attrs & content]]
-  `(StaticNode. ~tag ~attrs ~@(compile-seq content)))
+(defmethod compile-element-static [:node :all-literal]
+  [{:keys [form]}]
+  (render-element form))
 
-(defmethod compile-element ::literal-tag-and-no-attributes
-  [[tag & content]]
-  (compile-element (apply vector tag {} content)))
-
-(defmethod compile-element ::literal-tag
-  [[tag attrs & content]]
-  `(DynamicNode. [~tag ~attrs] ~@(compile-seq content)))
-
-(defmethod compile-element :default
-  [element]
-  (if (= (count element) 1)
-    `(DynamicNode. [~(first element) nil])
-    `(DynamicNode. [~(first element) ~(second element)
-                 ~@(compile-seq (rest (rest element)))])))
-
-(defn compile-seq
-  "Pre-compile data structures into HTML where possible."
-  [content]
-  (doall (for [expr content]
-           (cond
-             (vector? expr) (compile-element expr)
-             (literal? expr) `(StaticTextVNode. ~expr)
-             (hint? expr String) `(StaticTextVNode. ~expr)
-             (hint? expr Number) `(StaticTextVNode. ~expr)
-             (seq? expr) (compile-form expr)
-             :else `(DynamicVNode. ~expr)))))
+(defmulti emit-dynamic (fn [{:keys [op tag]}] [op tag]))
+(defmethod emit-dynamic [:constant 'cljs.core/Symbol]
+  [{:keys [form]}]
+  `(render-html ~form))
+(defmethod emit-dynamic [:constant 'string]
+  [{:keys [form]}]
+  `(render-html ~form))
 
 (defn compile-html
   "Pre-compile data structures into HTML where possible."
@@ -276,13 +318,23 @@
 
   )
 
-(defmacro ee [e]
-  (let [bbb (meta e)]
-    `(str ~bbb)))
-
-(definline ee2 [r]
-  `(str ~r))
 
 
-; Add a mutable map to vtrees. Contains ID -> real dom node
-; If branching -> store the conditional result, if different force the node(s) overriding.
+(comment
+
+  {:name ""
+   :mount-order 0
+   :params '[x y]
+   :ast {}
+   :dynamic-nodes {}}
+
+  (render-html [:div])
+
+  (:op (ana-api/analyze (ana-api/empty-env) [:div]))
+  (render-html "e")
+  (compile-element-static (ana-api/analyze (ana-api/empty-env) [:div [:p]]))
+  (second (:children (ana-api/analyze (ana-api/empty-env) [:div [:p]])))
+
+  (if (vector? x)
+    )
+  )
